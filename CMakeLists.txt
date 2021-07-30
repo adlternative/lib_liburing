@@ -21,3 +21,5 @@ add_executable(uring_test ${PROJECT_SOURCE_DIR}/test/lib_lib_uring_test.cpp
 													${PROJECT_SOURCE_DIR}/src/AsyncIORequest.cpp
 													${PROJECT_SOURCE_DIR}/src/lib_lib_uring.cpp
 							)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

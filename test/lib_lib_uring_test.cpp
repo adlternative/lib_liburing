@@ -22,7 +22,7 @@ TEST(Uring, constructor) {
   }
 }
 
-TEST(AsyncIORequest, create_impl) {
+TEST(Uring, AsyncIORequest) {
   char buffer[4096];
   int fd = open("./a.txt", O_RDWR, 0644);
   ASSERT_GT(fd, 0);
@@ -33,12 +33,13 @@ TEST(AsyncIORequest, create_impl) {
     auto read_request = std::make_shared<adl::AsyncIORequest>();
     read_request->prep_pread(fd, buffer, 4096, 0);
     uring.submitOne(read_request);
-    auto result_vec = uring.wait(1, 1);
-    ASSERT_EQ(result_vec.size(), 1);
-    EXPECT_EQ(result_vec[0]->get_result(), 5);
-    EXPECT_STREQ(buffer, "func\n");
-    close(fd);
-
+    auto result_vec_pointer = uring.wait(1, 1);
+    if (result_vec_pointer) {
+      EXPECT_EQ((*result_vec_pointer).size(), 1);
+      EXPECT_EQ((*result_vec_pointer)[0]->get_result(), 5);
+      EXPECT_STREQ(buffer, "func\n");
+      close(fd);
+    }
   } catch (std::system_error &e) {
     spdlog::error("Error: {}", e.what());
   } catch (...) {

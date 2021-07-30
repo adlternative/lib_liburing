@@ -3,7 +3,11 @@
 
 #define SPDLOG_FMT_EXTERNAL
 #include <cassert>
+#include <deque>
 #include <liburing.h>
+#include <optional>
+#include <queue>
+#include <set>
 #include <spdlog/spdlog.h>
 #include <system_error>
 
@@ -18,19 +22,38 @@ public:
    * @param entries 队列深度
    * @param flags IORING_SETUP_IOPOLL | IORING_SETUP_SQPOLL ...
    */
-  explicit Uring(unsigned int entries, unsigned flags = 0) {
-    if (io_uring_queue_init(entries, &ring, flags)) {
+  explicit Uring(unsigned int ring_size, unsigned flags = 0)
+      : ring_size_(ring_size), exited(false) {
+    if (io_uring_queue_init(ring_size, &ring, flags)) {
       int save_errno = errno;
       throw std::system_error(save_errno, std::system_category(), "Uring");
     }
   }
-
-  void clear() { io_uring_queue_exit(&ring); }
-  ~Uring() { clear(); }
+  /**
+   * @brief 表示 Uring 的生命周期结束 一般来说 Uring 应该是一个线程内的单例？
+   *
+   */
+  void exit() {
+    exited = true;
+    io_uring_queue_exit(&ring);
+  }
+  /**
+   * @brief Destroy the Uring object
+   *
+   */
+  ~Uring() {
+    if (!exited) {
+      exited = true;
+      exit();
+    }
+  }
 
   /*****************submit*****************************/
 
+  int submit();
   int submitOne(const std::shared_ptr<adl::AsyncIORequest> &request);
+  int submitMany(std::deque<std::shared_ptr<adl::AsyncIORequest>> &requests,
+                 int submit_nr);
 
   void submit_and_wait(unsigned wait_nr) {
     int ret = io_uring_submit_and_wait(&ring, wait_nr);
@@ -63,43 +86,43 @@ public:
 
   /*****************wait***************************/
 
-  std::vector<adl::AsyncIORequest *> wait(size_t minRequests,
-                                          size_t maxRequests);
+  std::optional<std::vector<std::shared_ptr<adl::AsyncIORequest>>>
+  wait(size_t minRequests, size_t maxRequests);
 
   /**
    * @brief 等到一个 cqe 完成
    *
    * @return struct io_uring_cqe*
    */
-  struct io_uring_cqe *wait() {
-    struct io_uring_cqe *cqe_ptr = nullptr;
-    int ret = io_uring_wait_cqe(&ring, &cqe_ptr);
-    if (ret < 0) {
-      int save_errno = errno;
-      throw std::system_error(save_errno, std::system_category(),
-                              "Uring::wait");
-    }
-    return cqe_ptr;
-  }
+  // struct io_uring_cqe *wait() {
+  //   struct io_uring_cqe *cqe_ptr = nullptr;
+  //   int ret = io_uring_wait_cqe(&ring, &cqe_ptr);
+  //   if (ret < 0) {
+  //     int save_errno = errno;
+  //     throw std::system_error(save_errno, std::system_category(),
+  //                             "Uring::wait");
+  //   }
+  //   return cqe_ptr;
+  // }
 
   /**
    * @brief 非阻塞,返回 cqe 如果 EAGAIN
    *
    * @return struct io_uring_cqe*
    */
-  struct io_uring_cqe *non_block_wait() {
-    struct io_uring_cqe *cqe_ptr = nullptr;
-    int ret = io_uring_peek_cqe(&ring, &cqe_ptr);
-    if (ret < 0) {
-      int save_errno = errno;
-      if (save_errno == EAGAIN || save_errno == EWOULDBLOCK)
-        return nullptr;
-      throw std::system_error(save_errno, std::system_category(),
-                              "Uring::non_block_wait");
-    }
-    // spdlog::debug("{}", ret);
-    return cqe_ptr;
-  }
+  // struct io_uring_cqe *non_block_wait() {
+  //   struct io_uring_cqe *cqe_ptr = nullptr;
+  //   int ret = io_uring_peek_cqe(&ring, &cqe_ptr);
+  //   if (ret < 0) {
+  //     int save_errno = errno;
+  //     if (save_errno == EAGAIN || save_errno == EWOULDBLOCK)
+  //       return nullptr;
+  //     throw std::system_error(save_errno, std::system_category(),
+  //                             "Uring::non_block_wait");
+  //   }
+  //   // spdlog::debug("{}", ret);
+  //   return cqe_ptr;
+  // }
 
   int wait_cqe_timeout(struct io_uring_cqe **cqe_ptr,
                        struct __kernel_timespec *ts);
@@ -122,8 +145,17 @@ public:
                             struct io_uring_restriction *res,
                             unsigned int nr_res);
 
+  /* deque ? vec ? set ? */
+  std::deque<std::shared_ptr<adl::AsyncIORequest>> ioRequestsQueue;
+  std::set<std::shared_ptr<adl::AsyncIORequest>>
+      ioRequestsSet; /* 需要一个 MAP 来索引么？ */
+
 private:
+  std::atomic<int> exited;
   struct io_uring ring;
+  int ring_size_;      /* 初始设置的环大小 */
+  int submitted_size_; /* 目前提交了且未处理的请求数量 */
+  // int completed_size_; /* 目前提交了且未处理的请求数量*/
 };
 
 } // namespace adl
