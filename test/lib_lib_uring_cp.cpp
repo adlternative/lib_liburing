@@ -12,8 +12,6 @@
 #define QD 32
 #define BS (16 * 1024)
 
-static int infd, outfd;
-
 static int get_file_size(int fd, off_t *size) {
   struct stat st;
 
@@ -34,41 +32,60 @@ static int get_file_size(int fd, off_t *size) {
   return -1;
 }
 
-int copy_file(std::unique_ptr<adl::Uring> &uring, off_t total_size) {
+int copy_file(const char *in_file_name, const char *out_file_name) {
   int ret;
-  off_t write_left = total_size, read_left = total_size;
+  off_t total_size;
   off_t read_offset = 0;
+  int infd, outfd;
+  std::unique_ptr<adl::Uring> uring = std::make_unique<adl::Uring>(QD);
 
+  infd = open(in_file_name, O_RDONLY);
+  if (infd < 0) {
+    spdlog::error("open {}: {}", in_file_name, strerror(errno));
+    return -1;
+  }
+
+  outfd = open(out_file_name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (outfd < 0) {
+    spdlog::error("open {}: {}", out_file_name, strerror(errno));
+    return -1;
+  }
+
+  if (get_file_size(infd, &total_size)) {
+    spdlog::error("{} get_file_size error: {}", in_file_name, strerror(errno));
+    return -1;
+  } else {
+    spdlog::info("{} size:{}", in_file_name, total_size);
+  }
+
+  off_t write_left = total_size, read_left = total_size;
+
+  /* 将输出文件的大小分成多个块进行分配并分配给读取任务，
+   * 注意这样可能分配的内存会比较大，但是这样可以保证读取任务的效率。*/
   while (read_left) {
     /* 限制每次的提交块最大 BS 16K */
     off_t block_size = std::min(read_left, (long)BS);
     /* 准备数据和缓冲区加入到 uring的请求队列中，
      * 还没真的 prep_read! */
-    /* 暂时每一个请求一个 BUFFER */
+    /* 为每一个请求分配一个 BUFFER */
     auto buffer = new char[block_size];
-    spdlog::info("block_size:{}", block_size);
     auto read_request = std::make_shared<adl::AsyncReadRequest>(
         infd, buffer, block_size, read_offset);
 
     read_request->set_finish_callback([=, &write_left, &uring]() -> void * {
-      auto read_request_temp = read_request;
       auto write_request = std::make_shared<adl::AsyncWriteRequest>(
-          outfd, read_request_temp->get_buffer(),
-          read_request_temp->get_processed_size(), 0);
+          outfd, read_request->get_buffer(), read_request->get_processed_size(),
+          read_offset);
       write_request->set_finish_callback([=, &write_left, &uring]() -> void * {
-        auto write_request_temp = write_request;
-        spdlog::debug("Write_request finish callback begin!");
-				spdlog::debug("size={}",write_request_temp->get_processed_size());
-        write_left -= write_request_temp->get_processed_size();
-        // printf("write_request: %p\n", write_request_temp.get());
-        // spdlog::debug("Write_request finish callback get_processed_size!");
-        free(write_request_temp->get_buffer());
+        spdlog::info("Write_request finish callback begin!");
+        spdlog::debug("processed_size={}", write_request->get_processed_size());
+        write_left -= write_request->get_processed_size();
+        free(write_request->get_buffer());
         return nullptr;
       });
       uring->ioRequestsQueue.push_back(write_request);
       return nullptr;
     });
-
     uring->ioRequestsQueue.push_back(read_request);
 
     read_left -= block_size;
@@ -77,7 +94,8 @@ int copy_file(std::unique_ptr<adl::Uring> &uring, off_t total_size) {
   while (write_left) {
     /* 提交任务 */
     if (uring->submit() < 0) {
-      spdlog::critical("uring submit failed \n", strerror(-ret), -ret);
+      spdlog::critical("uring submit failed: {}\n", strerror(-ret), -ret);
+      return -1;
     }
 
     /* 等待完成 */
@@ -106,17 +124,23 @@ int copy_file(std::unique_ptr<adl::Uring> &uring, off_t total_size) {
           break;
         default:
           /* bug? */
-          spdlog::error("something wrong? request_ptr->get_stat()={}",
-                        request_ptr->get_stat());
+          close(infd);
+          close(outfd);
+          spdlog::critical("Unkown request_ptr->get_stat() {}",
+                           request_ptr->get_stat());
           break;
         }
       }
     } else {
-      spdlog::error("something wrong? BYE!");
+      spdlog::error("Something wrong when uring wait?");
       close(infd);
       close(outfd);
+      spdlog::critical("Bye!");
+      return -1;
     }
   }
+  close(outfd);
+
   return 0;
 }
 
@@ -128,30 +152,7 @@ int main(int argc, char *argv[]) {
   // spdlog::set_pattern("*** [%H:%M:%S %z] %v ***");
   if (argc < 3) {
     spdlog::error("Usage: {} <infile> <outfile>\n", argv[0]);
-    return 1;
+    exit(1);
   }
-
-  infd = open(argv[1], O_RDONLY);
-  if (infd < 0) {
-    spdlog::error("{} open {}: {}", argv[0], argv[1], strerror(errno));
-    return 1;
-  }
-
-  outfd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if (outfd < 0) {
-    spdlog::error("{} open {}: {}", argv[0], argv[2], strerror(errno));
-    return 1;
-  }
-
-  std::unique_ptr<adl::Uring> uring = std::make_unique<adl::Uring>(QD);
-
-  if (get_file_size(infd, &file_size))
-    spdlog::critical("{} size:{}", argv[1], file_size);
-  spdlog::info("{} size:{}", argv[1], file_size);
-
-  ret = copy_file(uring, file_size);
-
-  close(infd);
-  close(outfd);
-  return ret;
+  return copy_file(argv[1], argv[2]);
 }

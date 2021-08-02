@@ -70,8 +70,6 @@ public:
     return io_uring_get_sqe(&ring);
   }
 
-  // struct AsyncIORequest *create_AsyncIORequest();
-
   /*****************cqe***************************/
 
   /* 内核给 complicate_queue.push_back()
@@ -88,41 +86,6 @@ public:
 
   std::optional<std::vector<std::shared_ptr<adl::AsyncIORequest>>>
   wait(size_t minRequests, size_t maxRequests);
-
-  /**
-   * @brief 等到一个 cqe 完成
-   *
-   * @return struct io_uring_cqe*
-   */
-  // struct io_uring_cqe *wait() {
-  //   struct io_uring_cqe *cqe_ptr = nullptr;
-  //   int ret = io_uring_wait_cqe(&ring, &cqe_ptr);
-  //   if (ret < 0) {
-  //     int save_errno = errno;
-  //     throw std::system_error(save_errno, std::system_category(),
-  //                             "Uring::wait");
-  //   }
-  //   return cqe_ptr;
-  // }
-
-  /**
-   * @brief 非阻塞,返回 cqe 如果 EAGAIN
-   *
-   * @return struct io_uring_cqe*
-   */
-  // struct io_uring_cqe *non_block_wait() {
-  //   struct io_uring_cqe *cqe_ptr = nullptr;
-  //   int ret = io_uring_peek_cqe(&ring, &cqe_ptr);
-  //   if (ret < 0) {
-  //     int save_errno = errno;
-  //     if (save_errno == EAGAIN || save_errno == EWOULDBLOCK)
-  //       return nullptr;
-  //     throw std::system_error(save_errno, std::system_category(),
-  //                             "Uring::non_block_wait");
-  //   }
-  //   // spdlog::debug("{}", ret);
-  //   return cqe_ptr;
-  // }
 
   int wait_cqe_timeout(struct io_uring_cqe **cqe_ptr,
                        struct __kernel_timespec *ts);
@@ -146,15 +109,16 @@ public:
                             unsigned int nr_res);
 
   /* deque ? vec ? set ? */
-  std::deque<std::shared_ptr<adl::AsyncIORequest>> ioRequestsQueue;
+  std::deque<std::shared_ptr<adl::AsyncIORequest>>
+      ioRequestsQueue; /* 请求任务队列 */
   std::set<std::shared_ptr<adl::AsyncIORequest>>
-      ioRequestsSet; /* 需要一个 MAP 来索引么？ */
+      ioRequestsSet; /* 目前来说是用来在提交任务之后保存任务的智能指针 */
 
 private:
-  std::atomic<int> exited;
-  struct io_uring ring;
-  int ring_size_;      /* 初始设置的环大小 */
-  int submitted_size_; /* 目前提交了且未处理的请求数量 */
+  std::atomic<int> exited; /* 退出状态 */
+  struct io_uring ring;    /* io_uring */
+  int ring_size_;          /* 初始设置的环大小 */
+  int submitted_size_;     /* 目前提交了且未处理的请求数量 */
   // int completed_size_; /* 目前提交了且未处理的请求数量*/
 };
 

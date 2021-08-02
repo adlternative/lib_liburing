@@ -93,6 +93,7 @@ Uring::wait(size_t minRequests, size_t maxRequests) {
     request->set_result(cqe->res);
     request->set_stat(adl::AsyncIORequest::COMPLETEED);
     auto &&ptr = request->shared_from_this();
+    /* 从暂存请求的集合中删除 */
     ioRequestsSet.erase(ptr);
     result.push_back(ptr);
 
@@ -104,7 +105,5 @@ err:
 ok:
   return {std::move(result)};
 }
-
-
 
 } // namespace adl
