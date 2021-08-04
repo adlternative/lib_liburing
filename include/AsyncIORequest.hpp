@@ -41,28 +41,6 @@ public:
   AsyncIORequest &operator=(const AsyncIORequest &) = delete;
   virtual ~AsyncIORequest() = default;
 
-  virtual void prep_pwritev(int fd, const iovec *iov, int iovcnt, off_t start) {
-    stat_ = READY;
-    io_uring_prep_writev(&sqe_, fd, iov, iovcnt, start);
-    io_uring_sqe_set_data(&sqe_, this);
-  }
-  virtual void prep_preadv(int fd, const iovec *iov, int iovcnt, off_t start) {
-    stat_ = READY;
-    io_uring_prep_readv(&sqe_, fd, iov, iovcnt, start);
-    io_uring_sqe_set_data(&sqe_, this);
-  }
-  virtual void prep_pwrite(int fd, const void *buf, unsigned nbytes,
-                           off_t offset) {
-    stat_ = READY;
-    io_uring_prep_write(&sqe_, fd, buf, nbytes, offset);
-    io_uring_sqe_set_data(&sqe_, this);
-  }
-  virtual void prep_pread(int fd, void *buf, unsigned nbytes, off_t offset) {
-    stat_ = READY;
-    io_uring_prep_read(&sqe_, fd, buf, nbytes, offset);
-    io_uring_sqe_set_data(&sqe_, this);
-  }
-
   /**
    * @brief 设置 submit_queue_entry 的 flag 比如 IOSQE_IO_LINK
    */
@@ -105,7 +83,9 @@ public:
   AsyncReadRequest(int fd, void *buffer, unsigned nbytes, off_t offset)
       : AsyncIORequest(), request_size_(nbytes), offset_(offset), fd_(fd),
         cur_(buffer), buffer_(buffer) {
-    AsyncIORequest::prep_pread(fd, buffer, nbytes, offset);
+    stat_ = READY;
+    io_uring_prep_read(&sqe_, fd_, buffer_, request_size_, offset_);
+    io_uring_sqe_set_data(&sqe_, this);
   }
   AsyncReadRequest(AsyncReadRequest &&rhs) noexcept
       : AsyncIORequest(std::move(rhs)), request_size_(rhs.request_size_),
@@ -117,9 +97,6 @@ public:
       offset_ = std::exchange(rhs.offset_, 0);
       fd_ = std::exchange(rhs.fd_, 0);
       cur_ = rhs.cur_;
-      ::explicit_bzero(&sqe_, sizeof(sqe_));
-      prep_pwrite(fd_, cur_, request_size_, offset_);
-      stat_ = READY;
     }
     return *this;
   }
@@ -139,10 +116,6 @@ public:
 
       /* 没读完则自重启 */
       if (request_size_ == result_) {
-        // spdlog::info("Read task finish!");
-        // for (int i = 0; i != 5; i++) {
-        //   spdlog::debug("buffer:{}", ((char *)buffer_)[i]);
-        // }
         cur_ = (char *)cur_ + result_;
         request_size_ -= result_;
         offset_ += result_;
@@ -153,7 +126,8 @@ public:
         request_size_ -= result_;
         offset_ += result_;
         ::explicit_bzero(&sqe_, sizeof(sqe_));
-        prep_pread(fd_, cur_, request_size_, offset_);
+        io_uring_prep_read(&sqe_, fd_, cur_, request_size_, offset_);
+        io_uring_sqe_set_data(&sqe_, this);
         stat_ = READY;
       } else {
         /* bug? */
@@ -171,9 +145,9 @@ public:
 private:
   unsigned request_size_; /* 当前请求大小 */
   off_t offset_;          /* 文件偏移量 */
-  void *cur_;             /* 当前读到哪里偏移量了 */
-  void *buffer_;
-  int fd_;
+  void *cur_;             /* 当前读到哪里了 */
+  void *buffer_;          /* 原始传递的 buffer 起始地址 */
+  int fd_;                /* 对应的文件描述符 */
 };
 
 class AsyncWriteRequest : public AsyncIORequest {
@@ -181,7 +155,9 @@ public:
   AsyncWriteRequest(int fd, void *buffer, unsigned nbytes, off_t offset)
       : AsyncIORequest(), request_size_(nbytes), offset_(offset), fd_(fd),
         cur_(buffer), buffer_(buffer) {
-    AsyncIORequest::prep_pwrite(fd, buffer, nbytes, offset);
+    stat_ = READY;
+    io_uring_prep_write(&sqe_, fd_, buffer_, request_size_, offset_);
+    io_uring_sqe_set_data(&sqe_, this);
   }
   AsyncWriteRequest(AsyncWriteRequest &&rhs) noexcept
       : AsyncIORequest(std::move(rhs)), request_size_(rhs.request_size_),
@@ -214,7 +190,8 @@ public:
         request_size_ -= result_;
         offset_ += result_;
         ::explicit_bzero(&sqe_, sizeof(sqe_));
-        prep_pwrite(fd_, cur_, request_size_, offset_);
+        io_uring_prep_write(&sqe_, fd_, cur_, request_size_, offset_);
+        io_uring_sqe_set_data(&sqe_, this);
         stat_ = READY;
       } else {
         /* bug? */
@@ -228,11 +205,11 @@ public:
   void *get_buffer() { return buffer_; }
   int get_processed_size() { return (char *)cur_ - (char *)buffer_; }
 
-  unsigned request_size_;
-  off_t offset_;
-  void *cur_;
-  void *buffer_;
-  int fd_;
+  unsigned request_size_; /* 当前请求大小 */
+  off_t offset_;          /* 文件偏移量 */
+  void *cur_;             /* 当前读到哪里了 */
+  void *buffer_;          /* 原始传递的 buffer 起始地址 */
+  int fd_;                /* 对应的文件描述符 */
 };
 
 } // namespace adl

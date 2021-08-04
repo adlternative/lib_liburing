@@ -22,7 +22,14 @@ TEST(Uring, constructor) {
   }
 }
 
-TEST(Uring, AsyncIORequest) {
+TEST(Uring, submit) {
+  adl::Uring uring(8, IORING_SETUP_SQPOLL);
+  EXPECT_EQ(0, uring.submit());
+  EXPECT_EQ(0, uring.submit());
+  EXPECT_EQ(0, uring.submit());
+}
+
+TEST(Uring, cat) {
   char buffer[4096];
   int fd = open("./a.txt", O_RDWR, 0644);
   ASSERT_GT(fd, 0);
@@ -30,9 +37,10 @@ TEST(Uring, AsyncIORequest) {
 
   try {
     adl::Uring uring(8, IORING_SETUP_SQPOLL);
-    auto read_request = std::make_shared<adl::AsyncIORequest>();
-    read_request->prep_pread(fd, buffer, 4096, 0);
-    uring.submitOne(read_request);
+    auto read_request =
+        std::make_shared<adl::AsyncReadRequest>(fd, buffer, 4096, 0);
+    uring.push_back(read_request);
+    ASSERT_EQ(1, uring.submit());
     auto result_vec_pointer = uring.wait(1, 1);
     if (result_vec_pointer) {
       EXPECT_EQ((*result_vec_pointer).size(), 1);

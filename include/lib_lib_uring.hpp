@@ -25,8 +25,8 @@ public:
   explicit Uring(unsigned int ring_size, unsigned flags = 0)
       : ring_size_(ring_size), exited(false) {
     if (io_uring_queue_init(ring_size, &ring, flags)) {
-      int save_errno = errno;
-      throw std::system_error(save_errno, std::system_category(), "Uring");
+      errno_ = errno;
+      throw std::system_error(errno_, std::system_category(), "Uring");
     }
   }
   /**
@@ -48,39 +48,11 @@ public:
     }
   }
 
+  io_uring_sqe *get_sqe() { return io_uring_get_sqe(&ring); }
+
   /*****************submit*****************************/
 
   int submit();
-  int submitOne(const std::shared_ptr<adl::AsyncIORequest> &request);
-  int submitMany(std::deque<std::shared_ptr<adl::AsyncIORequest>> &requests,
-                 int submit_nr);
-
-  void submit_and_wait(unsigned wait_nr) {
-    int ret = io_uring_submit_and_wait(&ring, wait_nr);
-    if (ret < 0) {
-      int save_errno = errno;
-      throw std::system_error(save_errno, std::system_category(),
-                              "Uring::submit");
-    }
-  }
-
-  /*****************sqe***************************/
-
-  struct io_uring_sqe *get_sqe() {
-    return io_uring_get_sqe(&ring);
-  }
-
-  /*****************cqe***************************/
-
-  /* 内核给 complicate_queue.push_back()
-   * 用户则是给 complicate_queue.pop_front()
-   * 用户用完 cqe 之后 head++
-   */
-
-  void cq_advance_one_with_cqe(struct io_uring_cqe *cqe) {
-    io_uring_cqe_seen(&ring, cqe);
-  }
-  void cq_advance(unsigned nr) { io_uring_cq_advance(&ring, nr); }
 
   /*****************wait***************************/
 
@@ -94,21 +66,28 @@ public:
 
   /**********register*******/
   int register_buffers(const struct iovec *iovecs, unsigned nr_iovecs);
-  int unregister_buffers(struct io_uring *ring);
+  int unregister_buffers();
   int register_files(const int *files, unsigned nr_files);
-  int unregister_files(struct io_uring *ring);
+  int unregister_files();
   int register_files_update(unsigned off, int *files, unsigned nr_files);
   int register_eventfd(int fd);
   int register_eventfd_async(int fd);
-  int unregister_eventfd(struct io_uring *ring);
+  int unregister_eventfd();
   int register_probe(struct io_uring_probe *p, unsigned nr);
-  int register_personality(struct io_uring *ring);
+  int register_personality();
   int unregister_personality(int id);
-  int register_restrictions(struct io_uring *ring,
-                            struct io_uring_restriction *res,
+  int register_restrictions(struct io_uring_restriction *res,
                             unsigned int nr_res);
 
-  /* deque ? vec ? set ? */
+  void push_back(const std::shared_ptr<adl::AsyncIORequest> &request) {
+    ioRequestsQueue.push_back(request);
+  }
+
+  void push_back(std::shared_ptr<adl::AsyncIORequest> &&request) {
+    ioRequestsQueue.push_back(std::move(request));
+  }
+
+  /* deque ? vec ? list ? */
   std::deque<std::shared_ptr<adl::AsyncIORequest>>
       ioRequestsQueue; /* 请求任务队列 */
   std::set<std::shared_ptr<adl::AsyncIORequest>>
@@ -118,8 +97,7 @@ private:
   std::atomic<int> exited; /* 退出状态 */
   struct io_uring ring;    /* io_uring */
   int ring_size_;          /* 初始设置的环大小 */
-  int submitted_size_;     /* 目前提交了且未处理的请求数量 */
-  // int completed_size_; /* 目前提交了且未处理的请求数量*/
+  int errno_;              /* 保存 errno? */
 };
 
 } // namespace adl

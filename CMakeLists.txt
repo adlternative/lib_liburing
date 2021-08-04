@@ -27,17 +27,36 @@ target_link_libraries(
 )
 
 
-add_executable(uring_test2 ${PROJECT_SOURCE_DIR}/test/lib_lib_uring_cp.cpp
+add_executable(uring_cp ${PROJECT_SOURCE_DIR}/example/lib_lib_uring_cp.cpp
 													${PROJECT_SOURCE_DIR}/src/AsyncIORequest.cpp
 													${PROJECT_SOURCE_DIR}/src/lib_lib_uring.cpp
 							)
 
 target_link_libraries(
-	uring_test2
+	uring_cp
 	uring
 	fmt
 	spdlog
 	gtest
+	gflags
+)
+
+add_executable(errno_util ${PROJECT_SOURCE_DIR}/test/errno_util_test.cpp
+													${PROJECT_SOURCE_DIR}/src/base/errno_util.cpp
+							)
+
+target_link_libraries(
+errno_util
+gtest
+gtest_main
+)
+
+add_executable(file_util ${PROJECT_SOURCE_DIR}/test/file_util_test.cpp)
+
+target_link_libraries(
+file_util
+gtest
+gtest_main
 )
 
 
